@@ -39,7 +39,7 @@ public class NumericValue extends MangoValue implements Comparable<NumericValue>
     private final double value;
 
     public NumericValue(double value) {
-        this.value = value;
+        this.value = Math.floor(value*100)/100;
     }
 
     @Override
