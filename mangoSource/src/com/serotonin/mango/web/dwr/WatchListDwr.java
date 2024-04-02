@@ -2,7 +2,7 @@
     Mango - Open Source M2M - http://mango.serotoninsoftware.com
     Copyright (C) 2006-2011 Serotonin Software Technologies Inc.
     @author Matthew Lohbihler
-    
+
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
@@ -81,7 +81,7 @@ public class WatchListDwr extends BaseDwr {
 
     /**
      * Retrieves point state for all points on the current watch list.
-     * 
+     *
      * @param pointIds
      * @return
      */
@@ -262,35 +262,59 @@ public class WatchListDwr extends BaseDwr {
      * Convenience method for creating a populated view state.
      */
     private WatchListState createWatchListState(HttpServletRequest request, DataPointVO pointVO, RuntimeManager rtm,
-            Map<String, Object> model, User user) {
-        // Get the data point status from the data image.
+                                                Map<String, Object> model, User user) {
         DataPointRT point = rtm.getDataPoint(pointVO.getId());
-
         WatchListState state = new WatchListState();
         state.setId(Integer.toString(pointVO.getId()));
 
-        PointValueTime pointValue = prepareBasePointState(Integer.toString(pointVO.getId()), state, pointVO, point,
-                model);
+        preparePointState(request, state, pointVO, point, model);
         setEvents(pointVO, user, model);
-        if (pointValue != null && pointValue.getValue() instanceof ImageValue) {
-            // Text renderers don't help here. Create a thumbnail.
-            setImageText(request, state, pointVO, model, pointValue);
-        }
-        else
-            setPrettyText(state, pointVO, model, pointValue);
-
-        if (pointVO.isSettable())
-            setChange(pointVO, state, point, request, model, user);
-
-        if (state.getValue() != null)
-            setChart(pointVO, state, request, model);
+        setImageOrPrettyText(request, state, pointVO, model);
+        setChangeIfNeeded(pointVO, state, point, request, model, user);
+        setChartIfNeeded(pointVO, state, request, model);
         setMessages(state, request, "watchListMessages", model);
 
         return state;
     }
 
+    private void preparePointState(HttpServletRequest request, WatchListState state, DataPointVO pointVO,
+                                   DataPointRT point, Map<String, Object> model) {
+        PointValueTime pointValue = prepareBasePointState(Integer.toString(pointVO.getId()), state, pointVO, point,
+                model);
+        state.setValue(pointValue != null ? pointValue.getValue().toString() : null);
+        state.setTime(pointValue != null ? Functions.getTime(pointValue) : null);
+    }
+
+    private void setImageOrPrettyText(HttpServletRequest request, WatchListState state, DataPointVO pointVO,
+                                      Map<String, Object> model) {
+        PointValueTime pointValue = state.getTime() != null ? prepareBasePointState(Integer.toString(pointVO.getId()),
+                state, pointVO, null, model) : null;
+
+        if (pointValue != null && pointValue.getValue() instanceof ImageValue) {
+            setImageText(request, state, pointVO, model, pointValue);
+        } else {
+            setPrettyText(state, pointVO, model, pointValue);
+        }
+    }
+
+    private void setChangeIfNeeded(DataPointVO pointVO, WatchListState state, DataPointRT point,
+                                   HttpServletRequest request, Map<String, Object> model, User user) {
+        if (pointVO.isSettable()) {
+            setChange(pointVO, state, point, request, model, user);
+        }
+    }
+
+    private void setChartIfNeeded(DataPointVO pointVO, WatchListState state, HttpServletRequest request,
+                                  Map<String, Object> model) {
+        if (state.getValue() != null) {
+            setChart(pointVO, state, request, model);
+        }
+    }
+
+
+
     private void setImageText(HttpServletRequest request, WatchListState state, DataPointVO pointVO,
-            Map<String, Object> model, PointValueTime pointValue) {
+                              Map<String, Object> model, PointValueTime pointValue) {
         if (!ObjectUtils.isEqual(pointVO.lastValue(), pointValue)) {
             state.setValue(generateContent(request, "imageValueThumbnail.jsp", model));
             if (pointValue != null)
@@ -303,8 +327,8 @@ public class WatchListDwr extends BaseDwr {
      * Method for creating image charts of the points on the watch list.
      */
     public String getImageChartData(int[] pointIds, int fromYear, int fromMonth, int fromDay, int fromHour,
-            int fromMinute, int fromSecond, boolean fromNone, int toYear, int toMonth, int toDay, int toHour,
-            int toMinute, int toSecond, boolean toNone, int width, int height) {
+                                    int fromMinute, int fromSecond, boolean fromNone, int toYear, int toMonth, int toDay, int toHour,
+                                    int toMinute, int toSecond, boolean toNone, int width, int height) {
         DateTime from = createDateTime(fromYear, fromMonth, fromDay, fromHour, fromMinute, fromSecond, fromNone);
         DateTime to = createDateTime(toYear, toMonth, toDay, toHour, toMinute, toSecond, toNone);
 
@@ -430,8 +454,8 @@ public class WatchListDwr extends BaseDwr {
 
     @MethodFilter
     public void getChartData(int[] pointIds, int fromYear, int fromMonth, int fromDay, int fromHour, int fromMinute,
-            int fromSecond, boolean fromNone, int toYear, int toMonth, int toDay, int toHour, int toMinute,
-            int toSecond, boolean toNone) {
+                             int fromSecond, boolean fromNone, int toYear, int toMonth, int toDay, int toHour, int toMinute,
+                             int toSecond, boolean toNone) {
         DateTime from = createDateTime(fromYear, fromMonth, fromDay, fromHour, fromMinute, fromSecond, fromNone);
         DateTime to = createDateTime(toYear, toMonth, toDay, toHour, toMinute, toSecond, toNone);
         DataExportDefinition def = new DataExportDefinition(pointIds, from, to);

@@ -189,7 +189,7 @@ public class MiscDwr extends BaseDwr {
     }
 
     public void jsError(String desc, String page, String line, String browserName, String browserVersion,
-            String osName, String location) {
+                        String osName, String location) {
         LOG.warn("Javascript error\r\n" + "   Description: " + desc + "\r\n" + "   Page: " + page + "\r\n"
                 + "   Line: " + line + "\r\n" + "   Browser name: " + browserName + "\r\n" + "   Browser version: "
                 + browserVersion + "\r\n" + "   osName: " + osName + "\r\n" + "   location: " + location);
@@ -300,126 +300,12 @@ public class MiscDwr extends BaseDwr {
         state.setLastAlarmLevelChange(0);
 
         while (!pollRequest.isTerminated() && System.currentTimeMillis() < expireTime) {
-            if (pollRequest.isMaxAlarm() && user != null) {
-                // Check the max alarm. First check if the events have changed since the last time this request checked.
-                long lastEMUpdate = eventManager.getLastAlarmTimestamp();
-                if (state.getLastAlarmLevelChange() < lastEMUpdate) {
-                    state.setLastAlarmLevelChange(lastEMUpdate);
-
-                    // The events have changed. See if the user's particular max alarm level has changed.
-                    int maxAlarmLevel = eventDao.getHighestUnsilencedAlarmLevel(user.getId());
-                    if (maxAlarmLevel != state.getMaxAlarmLevel()) {
-                        response.put("highestUnsilencedAlarmLevel", maxAlarmLevel);
-                        state.setMaxAlarmLevel(maxAlarmLevel);
-                    }
-                }
-            }
-
-            if (pollRequest.isWatchList() && user != null) {
-                synchronized (state) {
-                    List<WatchListState> newStates = watchListDwr.getPointData();
-                    List<WatchListState> differentStates = new ArrayList<WatchListState>();
-
-                    for (WatchListState newState : newStates) {
-                        WatchListState oldState = state.getWatchListState(newState.getId());
-                        if (oldState == null)
-                            differentStates.add(newState);
-                        else {
-                            WatchListState copy = newState.clone();
-                            copy.removeEqualValue(oldState);
-                            if (!copy.isEmpty())
-                                differentStates.add(copy);
-                        }
-                    }
-
-                    if (!differentStates.isEmpty()) {
-                        response.put("watchListStates", differentStates);
-                        state.setWatchListStates(newStates);
-                    }
-                }
-            }
-
-            if (pollRequest.isPointDetails() && user != null) {
-                WatchListState newState = dataPointDetailsDwr.getPointData();
-                WatchListState responseState;
-                WatchListState oldState = state.getPointDetailsState();
-
-                if (oldState == null)
-                    responseState = newState;
-                else {
-                    responseState = newState.clone();
-                    responseState.removeEqualValue(oldState);
-                }
-
-                if (!responseState.isEmpty()) {
-                    response.put("pointDetailsState", responseState);
-                    state.setPointDetailsState(newState);
-                }
-            }
-
-            if ((pollRequest.isView() && user != null) || (pollRequest.isViewEdit() && user != null)
-                    || pollRequest.getAnonViewId() > 0) {
-                List<ViewComponentState> newStates;
-                if (pollRequest.getAnonViewId() > 0)
-                    newStates = viewDwr.getViewPointDataAnon(pollRequest.getAnonViewId());
-                else
-                    newStates = viewDwr.getViewPointData(pollRequest.isViewEdit());
-                List<ViewComponentState> differentStates = new ArrayList<ViewComponentState>();
-
-                for (ViewComponentState newState : newStates) {
-                    ViewComponentState oldState = state.getViewComponentState(newState.getId());
-                    if (oldState == null)
-                        differentStates.add(newState);
-                    else {
-                        ViewComponentState copy = newState.clone();
-                        copy.removeEqualValue(oldState);
-                        if (!copy.isEmpty())
-                            differentStates.add(copy);
-                    }
-                }
-
-                if (!differentStates.isEmpty()) {
-                    response.put("viewStates", differentStates);
-                    state.setViewComponentStates(newStates);
-                }
-            }
-
-            if (pollRequest.isCustomView()) {
-                List<CustomComponentState> newStates = customViewDwr.getViewPointData();
-                List<CustomComponentState> differentStates = new ArrayList<CustomComponentState>();
-
-                for (CustomComponentState newState : newStates) {
-                    CustomComponentState oldState = state.getCustomViewState(newState.getId());
-                    if (oldState == null)
-                        differentStates.add(newState);
-                    else {
-                        CustomComponentState copy = newState.clone();
-                        copy.removeEqualValue(oldState);
-                        if (!copy.isEmpty())
-                            differentStates.add(copy);
-                    }
-                }
-
-                if (!differentStates.isEmpty()) {
-                    response.put("customViewStates", differentStates);
-                    state.setCustomViewStates(newStates);
-                }
-            }
-
-            if (pollRequest.isPendingAlarms() && user != null) {
-                // Create the list of most current pending alarm content.
-                Map<String, Object> model = new HashMap<String, Object>();
-                model.put("events", eventDao.getPendingEvents(user.getId()));
-                model.put("pendingEvents", true);
-                model.put("noContentWhenEmpty", true);
-                String currentContent = generateContent(httpRequest, "eventList.jsp", model);
-                currentContent = StringUtils.trimWhitespace(currentContent);
-
-                if (!StringUtils.isEqual(currentContent, state.getPendingAlarmsContent())) {
-                    response.put("pendingAlarmsContent", currentContent);
-                    state.setPendingAlarmsContent(currentContent);
-                }
-            }
+            handleMaxAlarmRequest(response, pollRequest, user, eventManager, eventDao, state);
+            handleWatchListRequest(response, pollRequest, user, state);
+            handlePointDetailsRequest(response, pollRequest, user, state);
+            handleViewRequest(response, pollRequest, user, state);
+            handleCustomViewRequest(response, pollRequest, state);
+            handlePendingAlarmsRequest(response, pollRequest, user, httpRequest, eventDao, state);
 
             if (!response.isEmpty())
                 break;
@@ -432,13 +318,151 @@ public class MiscDwr extends BaseDwr {
                     // no op
                 }
             }
-
         }
 
         if (pollRequest.isTerminated())
             response.put("terminated", true);
 
         return response;
+    }
+
+    private void handleMaxAlarmRequest(Map<String, Object> response, LongPollRequest pollRequest, User user,
+                                       EventManager eventManager, EventDao eventDao, LongPollState state) {
+        if (pollRequest.isMaxAlarm() && user != null) {
+            // Check the max alarm. First check if the events have changed since the last time this request checked.
+            long lastEMUpdate = eventManager.getLastAlarmTimestamp();
+            if (state.getLastAlarmLevelChange() < lastEMUpdate) {
+                state.setLastAlarmLevelChange(lastEMUpdate);
+
+                // The events have changed. See if the user's particular max alarm level has changed.
+                int maxAlarmLevel = eventDao.getHighestUnsilencedAlarmLevel(user.getId());
+                if (maxAlarmLevel != state.getMaxAlarmLevel()) {
+                    response.put("highestUnsilencedAlarmLevel", maxAlarmLevel);
+                    state.setMaxAlarmLevel(maxAlarmLevel);
+                }
+            }
+        }
+    }
+
+    private void handleWatchListRequest(Map<String, Object> response, LongPollRequest pollRequest, User user,
+                                        LongPollState state) {
+        if (pollRequest.isWatchList() && user != null) {
+            synchronized (state) {
+                List<WatchListState> newStates = watchListDwr.getPointData();
+                List<WatchListState> differentStates = new ArrayList<WatchListState>();
+
+                for (WatchListState newState : newStates) {
+                    WatchListState oldState = state.getWatchListState(newState.getId());
+                    if (oldState == null)
+                        differentStates.add(newState);
+                    else {
+                        WatchListState copy = newState.clone();
+                        copy.removeEqualValue(oldState);
+                        if (!copy.isEmpty())
+                            differentStates.add(copy);
+                    }
+                }
+
+                if (!differentStates.isEmpty()) {
+                    response.put("watchListStates", differentStates);
+                    state.setWatchListStates(newStates);
+                }
+            }
+        }
+    }
+
+    private void handlePointDetailsRequest(Map<String, Object> response, LongPollRequest pollRequest, User user,
+                                           LongPollState state) {
+        if (pollRequest.isPointDetails() && user != null) {
+            WatchListState newState = dataPointDetailsDwr.getPointData();
+            WatchListState responseState;
+            WatchListState oldState = state.getPointDetailsState();
+
+            if (oldState == null)
+                responseState = newState;
+            else {
+                responseState = newState.clone();
+                responseState.removeEqualValue(oldState);
+            }
+
+            if (!responseState.isEmpty()) {
+                response.put("pointDetailsState", responseState);
+                state.setPointDetailsState(newState);
+            }
+        }
+    }
+
+    private void handleViewRequest(Map<String, Object> response, LongPollRequest pollRequest, User user,
+                                   LongPollState state) {
+        if ((pollRequest.isView() && user != null) || (pollRequest.isViewEdit() && user != null)
+                || pollRequest.getAnonViewId() > 0) {
+            List<ViewComponentState> newStates;
+            if (pollRequest.getAnonViewId() > 0)
+                newStates = viewDwr.getViewPointDataAnon(pollRequest.getAnonViewId());
+            else
+                newStates = viewDwr.getViewPointData(pollRequest.isViewEdit());
+            List<ViewComponentState> differentStates = new ArrayList<ViewComponentState>();
+
+            for (ViewComponentState newState : newStates) {
+                ViewComponentState oldState = state.getViewComponentState(newState.getId());
+                if (oldState == null)
+                    differentStates.add(newState);
+                else {
+                    ViewComponentState copy = newState.clone();
+                    copy.removeEqualValue(oldState);
+                    if (!copy.isEmpty())
+                        differentStates.add(copy);
+                }
+            }
+
+            if (!differentStates.isEmpty()) {
+                response.put("viewStates", differentStates);
+                state.setViewComponentStates(newStates);
+            }
+        }
+    }
+
+    private void handleCustomViewRequest(Map<String, Object> response, LongPollRequest pollRequest,
+                                         LongPollState state) {
+        if (pollRequest.isCustomView()) {
+            List<CustomComponentState> newStates = customViewDwr.getViewPointData();
+            List<CustomComponentState> differentStates = new ArrayList<CustomComponentState>();
+
+            for (CustomComponentState newState : newStates) {
+                CustomComponentState oldState = state.getCustomViewState(newState.getId());
+                if (oldState == null)
+                    differentStates.add(newState);
+                else {
+                    CustomComponentState copy = newState.clone();
+                    copy.removeEqualValue(oldState);
+                    if (!copy.isEmpty())
+                        differentStates.add(copy);
+                }
+            }
+
+            if (!differentStates.isEmpty()) {
+                response.put("customViewStates", differentStates);
+                state.setCustomViewStates(newStates);
+            }
+        }
+    }
+
+    private void handlePendingAlarmsRequest(Map<String, Object> response, LongPollRequest pollRequest, User user,
+                                            HttpServletRequest httpRequest, EventDao eventDao, LongPollState state) {
+        if (pollRequest.isPendingAlarms() && user != null) {
+            // Create the list of most current pending alarm content.
+            Map<String, Object> model = new HashMap<String, Object>();
+            model.put("events", eventDao.getPendingEvents(user.getId()));
+            model.put("pendingEvents", true);
+            model.put("noContentWhenEmpty", true);
+            String currentContent = generateContent(httpRequest, "eventList.jsp", model);
+            currentContent = StringUtils.trimWhitespace(currentContent);
+
+            if (!StringUtils.isEqual(currentContent, state.getPendingAlarmsContent())) {
+                response.put("pendingAlarmsContent", currentContent);
+                state.setPendingAlarmsContent(currentContent);
+            }
+        }
     }
 
     public void terminateLongPoll(int pollSessionId) {
@@ -556,3 +580,5 @@ public class MiscDwr extends BaseDwr {
         }
     }
 }
+
+
